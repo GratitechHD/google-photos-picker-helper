@@ -1,9 +1,8 @@
 // picker.js
-// Placeholder for Google Photos Picker integration
-// You will need to fill in the real OAuth and Picker API logic
+// Google Photos Library API integration for image picking
 
 const CLIENT_ID = '214215208846-t8tcn7343prse24g6i00c2lqqi6k49ue.apps.googleusercontent.com';
-const SCOPES = 'https://www.googleapis.com/auth/photospicker.readonly';
+const SCOPES = 'https://www.googleapis.com/auth/photoslibrary.readonly';
 
 let accessToken = null;
 
@@ -29,47 +28,58 @@ async function authenticate() {
   });
 }
 
-// 2. Create Picker session
-async function createPickerSession() {
-  const response = await fetch('https://photospicker.googleapis.com/v1/sessions', {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Bearer ' + accessToken,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      mediaTypes: ['PHOTOS'],
-    })
-  });
-  if (!response.ok) throw new Error('Failed to create picker session');
-  return response.json();
-}
-
-// 3. Poll for selection
-async function pollSession(sessionId) {
-  let done = false;
-  let pollUrl = `https://photospicker.googleapis.com/v1/sessions/${sessionId}`;
-  while (!done) {
-    const response = await fetch(pollUrl, {
-      headers: { 'Authorization': 'Bearer ' + accessToken }
-    });
-    const data = await response.json();
-    if (data.mediaItemsSet) {
-      done = true;
-      return data;
-    }
-    // Wait for the recommended interval (default: 2s)
-    await new Promise(res => setTimeout(res, 2000));
-  }
-}
-
-// 4. List selected media items
-async function listMediaItems(sessionId) {
-  const response = await fetch(`https://photospicker.googleapis.com/v1/mediaItems?sessionId=${sessionId}`, {
+// 2. Fetch media items from the user's Google Photos library
+async function fetchMediaItems(pageToken = null) {
+  let url = 'https://photoslibrary.googleapis.com/v1/mediaItems?pageSize=25';
+  if (pageToken) url += `&pageToken=${pageToken}`;
+  const response = await fetch(url, {
     headers: { 'Authorization': 'Bearer ' + accessToken }
   });
-  if (!response.ok) throw new Error('Failed to list media items');
+  if (!response.ok) throw new Error('Failed to fetch media items');
   return response.json();
+}
+
+// 3. Render media items as a gallery for picking
+function renderGallery(mediaItems) {
+  const gallery = document.createElement('div');
+  gallery.style.display = 'flex';
+  gallery.style.flexWrap = 'wrap';
+  gallery.style.gap = '12px';
+  gallery.style.marginTop = '1em';
+
+  mediaItems.forEach(item => {
+    const img = document.createElement('img');
+    img.src = item.baseUrl + '=w200-h200-c';
+    img.alt = item.filename || '';
+    img.style.width = '120px';
+    img.style.height = '120px';
+    img.style.objectFit = 'cover';
+    img.style.cursor = 'pointer';
+    img.title = item.filename || '';
+    img.addEventListener('click', () => selectImage(item));
+    gallery.appendChild(img);
+  });
+
+  // Remove previous gallery if exists
+  const prev = document.getElementById('gphotos-gallery');
+  if (prev) prev.remove();
+  gallery.id = 'gphotos-gallery';
+  document.body.appendChild(gallery);
+}
+
+// 4. Handle image selection
+function selectImage(item) {
+  // Send the selected photo back to the opener window
+  if (window.opener) {
+    window.opener.postMessage({
+      type: 'GOOGLE_PHOTOS_SELECTED',
+      photos: [item.baseUrl + '=d'] // Use download parameter for full image
+    }, '*'); // Replace * with your Amazon origin in production
+    showStatus('Photo sent to parent window!');
+    setTimeout(() => window.close(), 1000);
+  } else {
+    showStatus('No opener window found.');
+  }
 }
 
 // 5. Main flow
@@ -78,28 +88,13 @@ document.getElementById('pick').addEventListener('click', async function() {
   showStatus('Authenticating with Google...');
   try {
     await authenticate();
-    showStatus('Creating Google Photos Picker session...');
-    const session = await createPickerSession();
-    const pickerUri = session.pickerUri;
-    showStatus('Opening Google Photos Picker...');
-    window.open(pickerUri, '_blank');
-
-    showStatus('Waiting for selection...');
-    const sessionData = await pollSession(session.sessionId);
-
-    showStatus('Retrieving selected photos...');
-    const items = await listMediaItems(session.sessionId);
-
-    // Send the selected photo(s) back to the opener window
-    if (window.opener) {
-      window.opener.postMessage({
-        type: 'GOOGLE_PHOTOS_SELECTED',
-        photos: items.mediaItems.map(item => item.baseUrl)
-      }, '*'); // Replace * with your Amazon origin in production
-      showStatus('Photo(s) sent to parent window!');
-      setTimeout(() => window.close(), 1000);
+    showStatus('Fetching your Google Photos...');
+    const data = await fetchMediaItems();
+    if (data.mediaItems && data.mediaItems.length > 0) {
+      showStatus('Click a photo to select it.');
+      renderGallery(data.mediaItems);
     } else {
-      showStatus('No opener window found.');
+      showStatus('No photos found in your Google Photos library.');
     }
   } catch (e) {
     showStatus('Error: ' + e);
